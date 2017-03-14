@@ -43,22 +43,7 @@ a zależności będą rozwiązywane. W końcu to odwrócenie sterowania. Musimy 
 zależności zdefiniowanych w naszym aktorze. Zrobimy to w klasyczny sposób pozwalając kontenerowi wywołać dynamicznie 
 konstruktor klasy. Musimy w tym celu nieco zmodyfikować kod rejestracji typu aktora. 
 
-{% highlight c# linenos %}
-var container = new Container()
-    .WithActorFactories();
- 
-container.RegisterMany(new [] { typeof(Program).Assembly}, 
-    type=>type.IsAssignableTo(typeof(IoCEnabledActorBase)));
- 
-ActorRuntime.RegisterActorAsync<DeviceSensor>(
-    (context, typeInformation) =>
-    new ActorService(context, typeInformation, 
-        container.ActorFactory<DeviceSensor>
-    )).GetAwaiter().GetResult();
- 
-Thread.Sleep(Timeout.Infinite);
-
-{% endhighlight %}
+{% gist 7a22755e22a512c2efcdf2b888687432 ActorRegistration.cs %}
 
 Linie 1-5 to konfiguracja kontenera i rejestracja typu aktora. Omówię to za chwilę. 
 Linie 6-10 to rejestracja typu aktora w infrastrukturze Service Fabric. 
@@ -67,17 +52,7 @@ zarejestrować własną fabrykę tworzenia usługi i w tej usłudze zdefiniować
 Fabryka aktorów to delegat według następującej sygnatury: *Func<ActorService, ActorId, ActorBase>*.  
 W powyższym przykładzie ta fabryka jest zaimplementowana w innej klasie dla reużywalności i przejrzystości. 
 
-{% highlight c# linenos %}
-public static TActor ActorFactory<TActor>(this IResolver container, 
-    ActorService actorService, ActorId actorId)
-    where TActor : IoCEnabledActorBase
-{
-    var factory = container.Resolve<IActorInstanceFactory<TActor>>();
-    factory.RegisterServiceAndActorId(actorService, actorId);
-    return factory.CreateActor();
-}
-
-{% endhighlight %}
+{% gist 7a22755e22a512c2efcdf2b888687432 ActorFactory.cs %}
 
 Powyższa metoda zostanie wywołana za każdym razem, kiedy Service Fabric poczuje potrzebę utworzenia 
 nowej instancji aktora. Będzie to miało miejsce za każdym razem kiedy następować będzie aktywacja 
@@ -110,20 +85,7 @@ Postaram się kiedyś rozwinąć ten pomysł w osobnym wpisie.
 kodu rejestracji typu aktora w Service Fabric. Najpierw tworzymy kontener i natychmiast rejestrujemy 
 w nim nasze pomocnicze komponenty. 
 
-{% highlight c# linenos %}
-public static IContainer WithActorFactories(this IContainer container)
-{
-    container.RegisterMany<ActorActivationContext>(
-        Reuse.InResolutionScope,
-        serviceTypeCondition: type=>type.IsInterface);
- 
-    container.Register(typeof(IActorInstanceFactory<>), 
-        typeof(ActorInstanceFactory<>), 
-        Reuse.InResolutionScope);
- 
-    return container;
-}
-{% endhighlight %}
+{% gist 7a22755e22a512c2efcdf2b888687432 WithActorFactories.cs %}
 
 Jest to typowa rejestracja komponentu w DryIoC i nie chciałbym w tym miejscu przepisywać dokumentacji 
 tego produktu. Warto jednak zwrócić uwagę, że oba komponenty rejestrowane są w trybie *Reuse.InResolutionScope*.
@@ -133,71 +95,7 @@ instancja obiektu będzie reużyta. Każde kolejne wywołanie metody Resove spow
 Ponadto działa to tak jak oczekiwalibyśmy również przy użyciu obiektu Lazy. Dokładne zachowanie kontenera 
 w tym scenariuszu obrazuje poniższy test.
 
-{% highlight c# linenos %}
-[TestClass]
-public class DryiocTests
-{
-    public class Component
-    {
-        public Component(CreationContext context)
-        {
-            Parameter = context.Parameter;
-        }
- 
-        public object Parameter { get; }
-    }
- 
-    public class Factory
-    {
-        private readonly CreationContext _context;
-        private readonly Lazy<Component> _lazyComponent;
-        public Factory(CreationContext context, Lazy<Component> lazyComponent)
-        {
-            _context = context;
-            _lazyComponent = lazyComponent;
-        }
- 
-        public Component CreateComponent()
-        {
-            return _lazyComponent.Value;
-        }
- 
-        public object Parameter
-        {
-            set { _context.Parameter = value; }
-        }
-    }
- 
-    public class CreationContext
-    {
-        public object Parameter { get; set; }
-    }
- 
-    [TestMethod]
-    public void test_lazy_resolve_and_resolutionscope_reuse()
-    {
-        var container = new Container();
-        container.Register<Component>(Reuse.InResolutionScope);
-        container.Register<CreationContext>(Reuse.InResolutionScope);
-        container.Register<Factory>(Reuse.Transient);
- 
-        var object1 = new object();
-        var factory1 = container.Resolve<Factory>();
-        factory1.Parameter = object1;
- 
-        var object2 = new object();
-        var factory2 = container.Resolve<Factory>();
-        factory2.Parameter = object2;
- 
- 
-        var component1 = factory1.CreateComponent();
-        var component2 = factory2.CreateComponent();
- 
-        Assert.AreSame(component1.Parameter, object1);
-        Assert.AreNotSame(component1.Parameter, component2.Parameter);
-    }
-}
-{% endhighlight %}
+{% gist 7a22755e22a512c2efcdf2b888687432 DryiocTests.cs %}
 
 Tym sposobem za każdym razem, kiedy będziemy potrzebowali wykorzystać nowy komponent w naszym aktorze, wystarczy dodać jego interfejs do konstruktora, zapisać go w polu i gotowe. 
 
